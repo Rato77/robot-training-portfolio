@@ -1,14 +1,15 @@
-#define IN1 13
-#define IN2 14
+// uart_test 串口收发测试demo
+// 功能：开机打印提示，收到字符原样回显
 void setup() {
-  pinMode(IN1, OUTPUT);
-  pinMode(IN2, OUTPUT);
+  Serial.begin(115200);
+  Serial.println("==== UART Test Ready ====");
+  Serial.println("Input anything, I will echo back:");
 }
+
 void loop() {
-  digitalWrite(IN1, HIGH);
-  digitalWrite(IN2, LOW);
-  delay(800);
-  digitalWrite(IN1, LOW);
-  digitalWrite(IN2, HIGH);
-  delay(800);
+  if (Serial.available() > 0) {
+    char ch = Serial.read();
+    Serial.print("Recv: ");
+    Serial.println(ch);
+  }
 }
