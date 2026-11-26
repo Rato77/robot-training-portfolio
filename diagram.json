@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "author": "第七组·赛道 B",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "wokwi-esp32-devkit-v1", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-resistor", "id": "r_run", "top": 120, "left": 360, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led_run", "top": 120, "left": 440, "attrs": { "color": "green" } },
+    { "type": "wokwi-resistor", "id": "r_fault", "top": 200, "left": 360, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "led_fault", "top": 200, "left": 440, "attrs": { "color": "red" } },
+    { "type": "wokwi-pushbutton", "id": "estop", "top": 300, "left": 360, "attrs": { "color": "red", "label": "ESTOP" } }
+  ],
+  "connections": [
+    ["esp:GPIO2", "r_run:1", ["green"]],
+    ["r_run:2", "led_run:anode", ["green"]],
+    ["led_run:cathode", "esp:GND.2", ["black"]],
+    ["esp:GPIO15", "r_fault:1", ["orange"]],
+    ["r_fault:2", "led_fault:anode", ["orange"]],
+    ["led_fault:cathode", "esp:GND.2", ["black"]],
+    ["esp:GPIO32", "estop:1", ["yellow"]],
+    ["estop:2", "esp:GND.2", ["black"]]
+  ]
+}
