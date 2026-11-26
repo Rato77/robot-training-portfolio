@@ -24,25 +24,33 @@ const uint8_t PIN_ESTOP = 32;          // 低有效，内部上拉
 const uint8_t LED_RUN = 2, LED_FAULT = 15;
 
 /* ---------------- LEDC PWM 兼容层 ----------------
- * Arduino-ESP32 2.x: ledcSetup(通道,频率,位数) + ledcAttachPin(引脚,通道) + ledcWrite(通道,占空比)
- * Arduino-ESP32 3.x: ledcAttach(引脚,频率,位数) + ledcWrite(引脚,占空比)，通道由内核分配
- * 用下方 3 个包装函数屏蔽差异，业务代码不需要 #if。
+ * 默认使用 Arduino-ESP32 3.x API（Wokwi 当前内核）：
+ *   ledcAttach(引脚,频率,位数) + ledcWrite(引脚,占空比)
+ * 仅当明确识别到 2.x 内核，或手工定义 PWM_USE_LEGACY_LEDC 时，才回退到旧 API：
+ *   ledcSetup(通道,...) + ledcAttachPin(引脚,通道) + ledcWrite(通道,占空比)
+ * 这样即使内核没有定义版本宏，也不会误走旧分支导致编译失败。
  */
 const uint8_t PWM_CH_A = 0, PWM_CH_B = 1;
-inline void pwmSetup(uint8_t pin, uint8_t ch) {
-#if defined(ESP_ARDUINO_VERSION_MAJOR) && (ESP_ARDUINO_VERSION_MAJOR >= 3)
-  (void)ch;
-  ledcAttach(pin, 20000, 8);
+#if defined(PWM_USE_LEGACY_LEDC) || (defined(ESP_ARDUINO_VERSION_MAJOR) && (ESP_ARDUINO_VERSION_MAJOR < 3))
+#define PWM_LEGACY_API 1
 #else
+#define PWM_LEGACY_API 0
+#endif
+
+inline void pwmSetup(uint8_t pin, uint8_t ch) {
+#if PWM_LEGACY_API
   ledcSetup(ch, 20000, 8);
   ledcAttachPin(pin, ch);
+#else
+  (void)ch;
+  ledcAttach(pin, 20000, 8);
 #endif
 }
 inline void pwmWrite(uint8_t ch, uint32_t duty) {
-#if defined(ESP_ARDUINO_VERSION_MAJOR) && (ESP_ARDUINO_VERSION_MAJOR >= 3)
-  ledcWrite(ch == PWM_CH_A ? PIN_PWMA : PIN_PWMB, duty);
-#else
+#if PWM_LEGACY_API
   ledcWrite(ch, duty);
+#else
+  ledcWrite(ch == PWM_CH_A ? PIN_PWMA : PIN_PWMB, duty);
 #endif
 }
 
@@ -166,7 +174,7 @@ void handleFrame(const String &line) {
 void sendTelemetry() {
   String b = "T,";
   b += teleSeq++; b += ",";
-  b += micros();  b += ",";
+  b += (unsigned long)micros();  b += ",";   // 3.x 的 micros() 返回 uint64_t，String 无重载
   b += (long)cntL; b += ",";
   b += (long)cntR; b += ",";
   b += outL; b += ",";
@@ -222,3 +230,27 @@ void loop() {
     lastCtlMs = now;
 
     // 失联判定（唯一阈值来源）
+    if (state == ST_RUN && (uint32_t)(now - lastCmdMs) > CMD_TIMEOUT_MS)
+      enterFault(BIT_TIMEOUT);
+
+    // 堵转检测：有 PWM 但 300ms 内两轮计数几乎不动
+    static int32_t pL = 0, pR = 0;
+    static uint32_t stallT = 0;
+    int32_t dL = abs((long)(cntL - pL)), dR = abs((long)(cntR - pR));
+    pL = cntL; pR = cntR;
+    bool cmdMoving = (abs(outL) > 30 || abs(outR) > 30);
+    if (state == ST_RUN && cmdMoving && dL < 3 && dR < 3) {
+      if (now - stallT > STALL_WINDOW_MS) enterFault(BIT_STALL);
+    } else {
+      stallT = now;
+    }
+
+    applyOutput(cmdL, cmdR);
+  }
+
+  // 4) 50ms 遥测
+  if ((uint32_t)(now - lastTeleMs) >= TELEMETRY_MS) {
+    lastTeleMs = now;
+    sendTelemetry();
+  }
+}
