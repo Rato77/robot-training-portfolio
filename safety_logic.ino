@@ -1,11 +1,12 @@
 /*
  * 第七组·赛道 B —— ESP32 安全逻辑固件
  * 默认停机 + 500ms 失联停机 + 限速 + 堵转检测 + 串口协议（01号定稿）
- * 目标环境：Arduino-ESP32 2.x（Wokwi 默认），115200 baud
+ * 目标环境：Arduino-ESP32 2.x / 3.x 均兼容（Wokwi 当前默认 3.x），115200 baud
  * 引脚：编码器左 GPIO4/5，右 GPIO18/19（系统说明文档 §五）
  */
 
 #include <Arduino.h>
+#include <stdlib.h>   // strtoul / atoi，避免个别内核版本未间接包含
 
 /* ---------------- 常量（与交付文档一致，禁止随意改） ---------------- */
 const uint32_t CMD_TIMEOUT_MS = 500;   // 5 × 100ms 心跳
@@ -21,6 +22,29 @@ const uint8_t PIN_PWMB = 26, PIN_BIN1 = 25, PIN_BIN2 = 33;
 const uint8_t PIN_EA = 4, PIN_EB = 5, PIN_EC = 18, PIN_ED = 19;
 const uint8_t PIN_ESTOP = 32;          // 低有效，内部上拉
 const uint8_t LED_RUN = 2, LED_FAULT = 15;
+
+/* ---------------- LEDC PWM 兼容层 ----------------
+ * Arduino-ESP32 2.x: ledcSetup(通道,频率,位数) + ledcAttachPin(引脚,通道) + ledcWrite(通道,占空比)
+ * Arduino-ESP32 3.x: ledcAttach(引脚,频率,位数) + ledcWrite(引脚,占空比)，通道由内核分配
+ * 用下方 3 个包装函数屏蔽差异，业务代码不需要 #if。
+ */
+const uint8_t PWM_CH_A = 0, PWM_CH_B = 1;
+inline void pwmSetup(uint8_t pin, uint8_t ch) {
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && (ESP_ARDUINO_VERSION_MAJOR >= 3)
+  (void)ch;
+  ledcAttach(pin, 20000, 8);
+#else
+  ledcSetup(ch, 20000, 8);
+  ledcAttachPin(pin, ch);
+#endif
+}
+inline void pwmWrite(uint8_t ch, uint32_t duty) {
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && (ESP_ARDUINO_VERSION_MAJOR >= 3)
+  ledcWrite(ch == PWM_CH_A ? PIN_PWMA : PIN_PWMB, duty);
+#else
+  ledcWrite(ch, duty);
+#endif
+}
 
 /* ---------------- 状态与故障位 ---------------- */
 enum State : uint8_t { ST_STOP = 0, ST_RUN = 1, ST_FAULT = 2 };
@@ -73,8 +97,8 @@ void applyOutput(int l, int r) {
   digitalWrite(PIN_AIN2, outL >= 0 ? LOW  : HIGH);
   digitalWrite(PIN_BIN1, outR >= 0 ? HIGH : LOW);
   digitalWrite(PIN_BIN2, outR >= 0 ? LOW  : HIGH);
-  ledcWrite(0, (uint32_t)abs(outL));
-  ledcWrite(1, (uint32_t)abs(outR));
+  pwmWrite(PWM_CH_A, (uint32_t)abs(outL));
+  pwmWrite(PWM_CH_B, (uint32_t)abs(outR));
 
   digitalWrite(LED_RUN,   state == ST_RUN   ? HIGH : LOW);
   digitalWrite(LED_FAULT, state == ST_FAULT ? HIGH : LOW);
@@ -162,9 +186,9 @@ void setup() {
   pinMode(PIN_STBY, OUTPUT); digitalWrite(PIN_STBY, LOW);   // 默认待机
   pinMode(PIN_AIN1, OUTPUT); pinMode(PIN_AIN2, OUTPUT);
   pinMode(PIN_BIN1, OUTPUT); pinMode(PIN_BIN2, OUTPUT);
-  ledcSetup(0, 20000, 8); ledcAttachPin(PIN_PWMA, 0);
-  ledcSetup(1, 20000, 8); ledcAttachPin(PIN_PWMB, 1);
-  ledcWrite(0, 0); ledcWrite(1, 0);
+  pwmSetup(PIN_PWMA, PWM_CH_A);
+  pwmSetup(PIN_PWMB, PWM_CH_B);
+  pwmWrite(PWM_CH_A, 0); pwmWrite(PWM_CH_B, 0);
 
   pinMode(PIN_EA, INPUT_PULLUP); pinMode(PIN_EB, INPUT_PULLUP);
   pinMode(PIN_EC, INPUT_PULLUP); pinMode(PIN_ED, INPUT_PULLUP);
@@ -198,27 +222,3 @@ void loop() {
     lastCtlMs = now;
 
     // 失联判定（唯一阈值来源）
-    if (state == ST_RUN && (uint32_t)(now - lastCmdMs) > CMD_TIMEOUT_MS)
-      enterFault(BIT_TIMEOUT);
-
-    // 堵转检测：有 PWM 但 300ms 内两轮计数几乎不动
-    static int32_t pL = 0, pR = 0;
-    static uint32_t stallT = 0;
-    int32_t dL = abs((long)(cntL - pL)), dR = abs((long)(cntR - pR));
-    pL = cntL; pR = cntR;
-    bool cmdMoving = (abs(outL) > 30 || abs(outR) > 30);
-    if (state == ST_RUN && cmdMoving && dL < 3 && dR < 3) {
-      if (now - stallT > STALL_WINDOW_MS) enterFault(BIT_STALL);
-    } else {
-      stallT = now;
-    }
-
-    applyOutput(cmdL, cmdR);
-  }
-
-  // 4) 50ms 遥测
-  if ((uint32_t)(now - lastTeleMs) >= TELEMETRY_MS) {
-    lastTeleMs = now;
-    sendTelemetry();
-  }
-}
