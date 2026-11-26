@@ -31,6 +31,11 @@ robot‑training‑portfolio/
 ├─ resource_check.md      # W1软硬件资源核查表
 └─ reports/
 └─ week1.md            # W1四栏格式个人周报
+目录速查  交付物/
+├── README.md                  本文件：本周任务总览
+├── 01…06_*.md                 
+├── safety_logic/safety_logic.ino   固件
+└── 07_Wokwi仿真/               工程 + 截图 + 复现说明
 
 ## ✅ 任务进度
 ### W0 基础准备 ✅（全部完成）
